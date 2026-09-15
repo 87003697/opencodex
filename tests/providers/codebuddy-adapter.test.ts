@@ -364,6 +364,22 @@ describe("codebuddy runTurn streams a headless turn", () => {
     ]);
   });
 
+  test("keeps an existing pending slot when its channel receives an empty delta", () => {
+    const events: AdapterEvent[] = [];
+    const guarded = guardCodeBuddyScaffolding(event => events.push(event));
+
+    guarded({ type: "thinking_delta", thinking: "<" });
+    guarded({ type: "text_delta", text: "Hello" });
+    guarded({ type: "thinking_delta", thinking: "" });
+    guarded({ type: "done", stopReason: "stop" });
+
+    expect(events).toEqual([
+      { type: "thinking_delta", thinking: "<" },
+      { type: "text_delta", text: "Hello" },
+      { type: "done", stopReason: "stop" },
+    ]);
+  });
+
   test("releases a continued pending tail at its first position without moving later bytes", () => {
     const events: AdapterEvent[] = [];
     const guarded = guardCodeBuddyScaffolding(event => events.push(event));

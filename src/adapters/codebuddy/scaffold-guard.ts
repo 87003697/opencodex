@@ -48,8 +48,19 @@ export class CodeBuddyScaffoldFilter {
   }
 
   push(chunk: string): CodeBuddyScaffoldFilterResult {
-    if (this.failed || !chunk) {
+    if (this.failed) {
       return { releasedPending: "", text: "", pendingContinues: false, fail: null };
+    }
+    // Empty deltas carry no new ordering information. If this channel already owns a possible
+    // marker suffix, keep that original event slot unresolved instead of replacing it after later
+    // events in another channel.
+    if (!chunk) {
+      return {
+        releasedPending: "",
+        text: "",
+        pendingContinues: this.hasPending(),
+        fail: null,
+      };
     }
     const priorPending = this.pending;
     const buffer = priorPending + chunk;
