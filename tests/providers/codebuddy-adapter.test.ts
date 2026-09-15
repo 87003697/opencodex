@@ -340,9 +340,43 @@ describe("codebuddy runTurn streams a headless turn", () => {
     guarded({ type: "done", stopReason: "stop" });
 
     expect(events).toEqual([
-      { type: "thinking_delta", thinking: "<safe" },
-      { type: "text_delta", text: "<" },
       { type: "thinking_delta", thinking: "<" },
+      { type: "text_delta", text: "<" },
+      { type: "thinking_delta", thinking: "safe" },
+      { type: "thinking_delta", thinking: "<" },
+      { type: "done", stopReason: "stop" },
+    ]);
+  });
+
+  test("queues later clean events behind an older pending tail", () => {
+    const events: AdapterEvent[] = [];
+    const guarded = guardCodeBuddyScaffolding(event => events.push(event));
+
+    guarded({ type: "thinking_delta", thinking: "<" });
+    guarded({ type: "text_delta", text: "Hello" });
+    expect(events).toEqual([]);
+    guarded({ type: "done", stopReason: "stop" });
+
+    expect(events).toEqual([
+      { type: "thinking_delta", thinking: "<" },
+      { type: "text_delta", text: "Hello" },
+      { type: "done", stopReason: "stop" },
+    ]);
+  });
+
+  test("releases a continued pending tail at its first position without moving later bytes", () => {
+    const events: AdapterEvent[] = [];
+    const guarded = guardCodeBuddyScaffolding(event => events.push(event));
+
+    guarded({ type: "thinking_delta", thinking: "<｜" });
+    guarded({ type: "text_delta", text: "middle" });
+    guarded({ type: "thinking_delta", thinking: "safe" });
+    guarded({ type: "done", stopReason: "stop" });
+
+    expect(events).toEqual([
+      { type: "thinking_delta", thinking: "<｜" },
+      { type: "text_delta", text: "middle" },
+      { type: "thinking_delta", thinking: "safe" },
       { type: "done", stopReason: "stop" },
     ]);
   });

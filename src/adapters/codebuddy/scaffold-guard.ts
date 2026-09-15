@@ -12,7 +12,12 @@ const MARKERS = [DSML_OPEN, DSML_CLOSE] as const;
 const MAX_MARKER_LENGTH = Math.max(...MARKERS.map(marker => marker.length));
 
 export interface CodeBuddyScaffoldFilterResult {
+  /** Bytes released from the suffix withheld by an earlier event on this channel. */
+  releasedPending: string;
+  /** Safe bytes that belong to the event currently being processed. */
   text: string;
+  /** The earlier pending slot still owns the newly extended marker prefix. */
+  pendingContinues: boolean;
   fail: string | null;
 }
 
@@ -43,8 +48,11 @@ export class CodeBuddyScaffoldFilter {
   }
 
   push(chunk: string): CodeBuddyScaffoldFilterResult {
-    if (this.failed || !chunk) return { text: "", fail: null };
-    const buffer = this.pending + chunk;
+    if (this.failed || !chunk) {
+      return { releasedPending: "", text: "", pendingContinues: false, fail: null };
+    }
+    const priorPending = this.pending;
+    const buffer = priorPending + chunk;
     this.pending = "";
     const lowered = buffer.toLowerCase();
 
@@ -62,22 +70,40 @@ export class CodeBuddyScaffoldFilter {
       this.failed = true;
       // With an opener, text before the tag is a completed answer prefix. With only a closer,
       // that prefix may be the body of a tag whose opening arrived through another channel/frame.
-      const text = marker === DSML_OPEN ? buffer.slice(0, earliest) : "";
-      return { text, fail: "vendor DSML tool-call markup" };
+      const safe = marker === DSML_OPEN ? buffer.slice(0, earliest) : "";
+      const releasedLength = Math.min(priorPending.length, safe.length);
+      return {
+        releasedPending: safe.slice(0, releasedLength),
+        text: safe.slice(releasedLength),
+        pendingContinues: false,
+        fail: "vendor DSML tool-call markup",
+      };
     }
 
     const held = heldSuffixLength(buffer);
-    if (held === 0) return { text: buffer, fail: null };
-    this.pending = buffer.slice(buffer.length - held);
-    return { text: buffer.slice(0, buffer.length - held), fail: null };
+    const safe = held === 0 ? buffer : buffer.slice(0, buffer.length - held);
+    if (held > 0) this.pending = buffer.slice(buffer.length - held);
+    const releasedLength = Math.min(priorPending.length, safe.length);
+    return {
+      releasedPending: safe.slice(0, releasedLength),
+      text: safe.slice(releasedLength),
+      // A marker prefix extended without releasing any byte still belongs at the earlier event's
+      // position. Once any prior byte is released, a newly held suffix belongs to this event.
+      pendingContinues: priorPending.length > 0
+        && safe.length === 0
+        && this.pending.startsWith(priorPending),
+      fail: null,
+    };
   }
 
   /** Release a suffix proven harmless by the terminal boundary. */
   flush(): CodeBuddyScaffoldFilterResult {
-    if (this.failed) return { text: "", fail: null };
+    if (this.failed) {
+      return { releasedPending: "", text: "", pendingContinues: false, fail: null };
+    }
     const text = this.pending;
     this.pending = "";
-    return { text, fail: null };
+    return { releasedPending: text, text: "", pendingContinues: false, fail: null };
   }
 }
 
@@ -92,38 +118,58 @@ export function guardCodeBuddyScaffolding(emit: (event: AdapterEvent) => void): 
   const textFilter = new CodeBuddyScaffoldFilter();
   const thinkingFilter = new CodeBuddyScaffoldFilter();
   type PendingChannel = "text" | "thinking";
-  const pendingOrder: PendingChannel[] = [];
+  type EventSlot = { resolved: boolean; event?: AdapterEvent };
+  const eventQueue: EventSlot[] = [];
+  const pendingSlots = new Map<PendingChannel, EventSlot>();
   let closed = false;
 
-  const trackPending = (
-    channel: PendingChannel,
-    filter: CodeBuddyScaffoldFilter,
-    replacedPending: boolean,
-  ): void => {
-    const at = pendingOrder.indexOf(channel);
-    if (filter.hasPending()) {
-      if (at < 0) pendingOrder.push(channel);
-      else if (replacedPending) {
-        // push() consumed the old suffix before withholding a new one. The new tail arrived after
-        // every other channel already in the queue, so keeping the old index would reorder output.
-        pendingOrder.splice(at, 1);
-        pendingOrder.push(channel);
-      }
-    } else if (at >= 0) {
-      pendingOrder.splice(at, 1);
+  const channelEvent = (channel: PendingChannel, text: string): AdapterEvent => (
+    channel === "text"
+      ? { type: "text_delta", text }
+      : { type: "thinking_delta", thinking: text }
+  );
+
+  const drainResolved = (): void => {
+    while (eventQueue[0]?.resolved) {
+      const slot = eventQueue.shift()!;
+      if (slot.event) emit(slot.event);
     }
   };
 
-  const flushChannel = (channel: PendingChannel): void => {
-    const tail = channel === "text" ? textFilter.flush() : thinkingFilter.flush();
-    if (!tail.text) return;
-    emit(channel === "text"
-      ? { type: "text_delta", text: tail.text }
-      : { type: "thinking_delta", thinking: tail.text });
+  const enqueueResolved = (event: AdapterEvent): void => {
+    eventQueue.push({ resolved: true, event });
+    drainResolved();
+  };
+
+  const resolvePendingSlot = (channel: PendingChannel, text: string): void => {
+    const slot = pendingSlots.get(channel);
+    if (!slot) return;
+    slot.resolved = true;
+    if (text) slot.event = channelEvent(channel, text);
+    pendingSlots.delete(channel);
+    drainResolved();
+  };
+
+  const enqueuePendingSlot = (channel: PendingChannel): void => {
+    const slot: EventSlot = { resolved: false };
+    eventQueue.push(slot);
+    pendingSlots.set(channel, slot);
+  };
+
+  const flushAllPending = (): void => {
+    for (const channel of ["text", "thinking"] as const) {
+      if (!pendingSlots.has(channel)) continue;
+      const filter = channel === "text" ? textFilter : thinkingFilter;
+      resolvePendingSlot(channel, filter.flush().releasedPending);
+    }
+    drainResolved();
   };
 
   const refuse = (): void => {
     if (closed) return;
+    // A terminal refusal proves every other marker-like suffix harmless. Resolve queued slots by
+    // their original positions before the error so no later safe event overtakes an older tail.
+    flushAllPending();
     closed = true;
     emit({
       type: "error",
@@ -140,21 +186,24 @@ export function guardCodeBuddyScaffolding(emit: (event: AdapterEvent) => void): 
     if (event.type === "text_delta" || event.type === "thinking_delta") {
       const channel: PendingChannel = event.type === "text_delta" ? "text" : "thinking";
       const filter = channel === "text" ? textFilter : thinkingFilter;
-      const replacedPending = filter.hasPending();
+      const hadPending = filter.hasPending();
       const cleaned = filter.push(event.type === "text_delta" ? event.text : event.thinking);
-      trackPending(channel, filter, replacedPending);
+      if (hadPending && !cleaned.pendingContinues) {
+        resolvePendingSlot(channel, cleaned.releasedPending);
+      }
       if (cleaned.text) {
-        if (event.type === "text_delta") emit({ ...event, text: cleaned.text });
-        else emit({ ...event, thinking: cleaned.text });
+        enqueueResolved(event.type === "text_delta"
+          ? { ...event, text: cleaned.text }
+          : { ...event, thinking: cleaned.text });
+      }
+      if (filter.hasPending() && !cleaned.pendingContinues) {
+        enqueuePendingSlot(channel);
       }
       if (cleaned.fail) refuse();
       return;
     }
     if (event.type === "done" || event.type === "error" || event.type === "incomplete") {
-      // Both filters can hold a possible split marker at once. Flush by the order in which
-      // those tails arrived; a fixed text-first flush changes the provider event sequence.
-      for (const channel of pendingOrder) flushChannel(channel);
-      pendingOrder.length = 0;
+      flushAllPending();
       closed = true;
       emit(event);
       return;
