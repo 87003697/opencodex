@@ -37,6 +37,11 @@ export class CodeBuddyScaffoldFilter {
   private pending = "";
   private failed = false;
 
+  /** True while this channel owns a possible split-marker suffix. */
+  hasPending(): boolean {
+    return this.pending.length > 0;
+  }
+
   push(chunk: string): CodeBuddyScaffoldFilterResult {
     if (this.failed || !chunk) return { text: "", fail: null };
     const buffer = this.pending + chunk;
@@ -86,7 +91,26 @@ function codeBuddyScaffoldErrorMessage(): string {
 export function guardCodeBuddyScaffolding(emit: (event: AdapterEvent) => void): (event: AdapterEvent) => void {
   const textFilter = new CodeBuddyScaffoldFilter();
   const thinkingFilter = new CodeBuddyScaffoldFilter();
+  type PendingChannel = "text" | "thinking";
+  const pendingOrder: PendingChannel[] = [];
   let closed = false;
+
+  const trackPending = (channel: PendingChannel, filter: CodeBuddyScaffoldFilter): void => {
+    const at = pendingOrder.indexOf(channel);
+    if (filter.hasPending()) {
+      if (at < 0) pendingOrder.push(channel);
+    } else if (at >= 0) {
+      pendingOrder.splice(at, 1);
+    }
+  };
+
+  const flushChannel = (channel: PendingChannel): void => {
+    const tail = channel === "text" ? textFilter.flush() : thinkingFilter.flush();
+    if (!tail.text) return;
+    emit(channel === "text"
+      ? { type: "text_delta", text: tail.text }
+      : { type: "thinking_delta", thinking: tail.text });
+  };
 
   const refuse = (): void => {
     if (closed) return;
@@ -104,21 +128,22 @@ export function guardCodeBuddyScaffolding(emit: (event: AdapterEvent) => void): 
   return (event: AdapterEvent): void => {
     if (closed) return;
     if (event.type === "text_delta" || event.type === "thinking_delta") {
-      const filter = event.type === "text_delta" ? textFilter : thinkingFilter;
+      const channel: PendingChannel = event.type === "text_delta" ? "text" : "thinking";
+      const filter = channel === "text" ? textFilter : thinkingFilter;
       const cleaned = filter.push(event.type === "text_delta" ? event.text : event.thinking);
+      trackPending(channel, filter);
       if (cleaned.text) {
-        emit(event.type === "text_delta"
-          ? { ...event, text: cleaned.text }
-          : { ...event, thinking: cleaned.text });
+        if (event.type === "text_delta") emit({ ...event, text: cleaned.text });
+        else emit({ ...event, thinking: cleaned.text });
       }
       if (cleaned.fail) refuse();
       return;
     }
     if (event.type === "done" || event.type === "error" || event.type === "incomplete") {
-      const textTail = textFilter.flush();
-      const thinkingTail = thinkingFilter.flush();
-      if (textTail.text) emit({ type: "text_delta", text: textTail.text });
-      if (thinkingTail.text) emit({ type: "thinking_delta", thinking: thinkingTail.text });
+      // Both filters can hold a possible split marker at once. Flush by the order in which
+      // those tails arrived; a fixed text-first flush changes the provider event sequence.
+      for (const channel of pendingOrder) flushChannel(channel);
+      pendingOrder.length = 0;
       closed = true;
       emit(event);
       return;

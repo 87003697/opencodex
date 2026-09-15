@@ -3,6 +3,7 @@ import { EventEmitter } from "node:events";
 import { Readable, Writable } from "node:stream";
 import type { ChildProcess } from "node:child_process";
 import { buildArgs, buildChildEnv, createCodeBuddyAdapter, type SpawnFn } from "../../src/adapters/codebuddy/adapter";
+import { guardCodeBuddyScaffolding } from "../../src/adapters/codebuddy/scaffold-guard";
 import { CODEBUDDY_CN_PROFILE, CODEBUDDY_GLOBAL_PROFILE, clearCodeBuddyBinaryCache } from "../../src/adapters/codebuddy/profiles";
 import type { AdapterEvent, OcxParsedRequest, OcxProviderConfig } from "../../src/types";
 import { createTestTranslatorBudget } from "../helpers/translator-budget";
@@ -278,6 +279,53 @@ describe("codebuddy runTurn streams a headless turn", () => {
     expect(text).not.toContain("private-body");
     expect(events.at(-1)).toMatchObject({ type: "error", code: "vendor_scaffold_detected" });
     expect(events.some(event => event.type === "done")).toBe(false);
+  });
+
+  test("refuses DSML tool markup from the reasoning channel", async () => {
+    const stdout = [
+      enc.encode(`${JSON.stringify({
+        type: "stream_event",
+        event: {
+          type: "content_block_delta",
+          delta: {
+            type: "thinking_delta",
+            thinking: "Safe thought. <｜｜DSML｜｜ invoke name=\"functions.exec\">private-body",
+          },
+        },
+      })}\n`),
+      enc.encode('{"type":"result","subtype":"success","is_error":false}\n'),
+    ];
+    const adapter = createCodeBuddyAdapter(provider(), {
+      spawn: () => fakeChild(stdout) as unknown as ChildProcess,
+      which: () => "/usr/bin/codebuddy",
+      killGraceMs: 20,
+    });
+
+    const events = await run(adapter, parsed());
+    expect(events.filter(event => event.type === "thinking_delta"))
+      .toEqual([{ type: "thinking_delta", thinking: "Safe thought. " }]);
+    expect(events.some(event => event.type === "done")).toBe(false);
+    expect(events.at(-1)).toMatchObject({
+      type: "error",
+      code: "vendor_scaffold_detected",
+      retryable: false,
+    });
+    expect(JSON.stringify(events)).not.toContain("private-body");
+  });
+
+  test("flushes harmless text and reasoning tails in their arrival order", () => {
+    const events: AdapterEvent[] = [];
+    const guarded = guardCodeBuddyScaffolding(event => events.push(event));
+
+    guarded({ type: "thinking_delta", thinking: "<" });
+    guarded({ type: "text_delta", text: "<" });
+    guarded({ type: "done", stopReason: "stop" });
+
+    expect(events).toEqual([
+      { type: "thinking_delta", thinking: "<" },
+      { type: "text_delta", text: "<" },
+      { type: "done", stopReason: "stop" },
+    ]);
   });
 
   test("region isolation: the global adapter never spawns with the CN environment", async () => {
