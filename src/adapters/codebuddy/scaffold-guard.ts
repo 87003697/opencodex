@@ -95,10 +95,20 @@ export function guardCodeBuddyScaffolding(emit: (event: AdapterEvent) => void): 
   const pendingOrder: PendingChannel[] = [];
   let closed = false;
 
-  const trackPending = (channel: PendingChannel, filter: CodeBuddyScaffoldFilter): void => {
+  const trackPending = (
+    channel: PendingChannel,
+    filter: CodeBuddyScaffoldFilter,
+    replacedPending: boolean,
+  ): void => {
     const at = pendingOrder.indexOf(channel);
     if (filter.hasPending()) {
       if (at < 0) pendingOrder.push(channel);
+      else if (replacedPending) {
+        // push() consumed the old suffix before withholding a new one. The new tail arrived after
+        // every other channel already in the queue, so keeping the old index would reorder output.
+        pendingOrder.splice(at, 1);
+        pendingOrder.push(channel);
+      }
     } else if (at >= 0) {
       pendingOrder.splice(at, 1);
     }
@@ -130,8 +140,9 @@ export function guardCodeBuddyScaffolding(emit: (event: AdapterEvent) => void): 
     if (event.type === "text_delta" || event.type === "thinking_delta") {
       const channel: PendingChannel = event.type === "text_delta" ? "text" : "thinking";
       const filter = channel === "text" ? textFilter : thinkingFilter;
+      const replacedPending = filter.hasPending();
       const cleaned = filter.push(event.type === "text_delta" ? event.text : event.thinking);
-      trackPending(channel, filter);
+      trackPending(channel, filter, replacedPending);
       if (cleaned.text) {
         if (event.type === "text_delta") emit({ ...event, text: cleaned.text });
         else emit({ ...event, thinking: cleaned.text });

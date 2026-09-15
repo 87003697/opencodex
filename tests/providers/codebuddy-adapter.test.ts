@@ -328,6 +328,25 @@ describe("codebuddy runTurn streams a headless turn", () => {
     ]);
   });
 
+  test("moves a replaced pending tail to its new arrival position", () => {
+    const events: AdapterEvent[] = [];
+    const guarded = guardCodeBuddyScaffolding(event => events.push(event));
+
+    guarded({ type: "thinking_delta", thinking: "<" });
+    guarded({ type: "text_delta", text: "<" });
+    // The old thinking tail is consumed into harmless output and a NEW possible marker tail is
+    // withheld. That new tail arrived after the text tail and must therefore flush after it.
+    guarded({ type: "thinking_delta", thinking: "safe<" });
+    guarded({ type: "done", stopReason: "stop" });
+
+    expect(events).toEqual([
+      { type: "thinking_delta", thinking: "<safe" },
+      { type: "text_delta", text: "<" },
+      { type: "thinking_delta", thinking: "<" },
+      { type: "done", stopReason: "stop" },
+    ]);
+  });
+
   test("region isolation: the global adapter never spawns with the CN environment", async () => {
     let seenEnv: NodeJS.ProcessEnv | undefined;
     const spawn: SpawnFn = (_cmd, _args, opts) => { seenEnv = opts.env as NodeJS.ProcessEnv; return fakeChild([enc.encode('{"type":"result","subtype":"success"}\n')]) as unknown as ChildProcess; };
