@@ -789,6 +789,31 @@ a spent request keeps the real 429 instead of replaying on a live stream.
 
 This is the proxy's own accounting only. Classifying an upstream 429 as org or project spend
 exhaustion is a separate contract with a separate owner.
+
+## Uploaded files do not move between accounts
+
+`account-change-state.ts` has always classified an uploaded `file_id` as account-bound, and the
+scrub has always removed only `previous_response_id` and `conversation`. A body whose only
+account-bound state was a file reference therefore reported nothing scrubbed and went to the new
+account unchanged — the one case the safety fix was meant to cover.
+
+Deleting the reference is not the contract. A file reference is content the caller attached, not
+continuation state the turn can do without, and dropping it silently answers a different question
+than the one that was asked. Pinning the request to the issuing account is not available either:
+every call site resolves and materialises its credential before reaching here, and the retry
+sites are reached precisely because the issuing account just refused the request. So the move is
+refused before dispatch, with HTTP 400 and an instruction to re-upload — not a retryable status,
+which would invite the same request back unchanged.
+
+`accountChangeFileReferenceRefusal()` checks the carriers directly rather than through the
+portability verdict, because that verdict reports the first reason it finds: a body carrying both
+a previous response id and a file reference reports only the former, and the file would slip
+through the scrub.
+
+Wired at the initial Codex selection in `request-prepare.ts` and at the native compact dispatch.
+The two alternate-account retry sites — `core-codex-account.ts` and the compact retry — still
+only scrub; refusing there needs a new outcome variant on their result types and their callers,
+and is left to a follow-up. The detection now exists in one place, so neither can drift further.
 Adapter-owned retries enter the same pending dispatch metadata path as initial key sends.
 The actual dispatch commits their count and recovery label once; unsent pending metadata
 is discarded on process exit and is not usage evidence. See [key attribution](../gui-and-management-api.md#upstream-key-account-attribution).
