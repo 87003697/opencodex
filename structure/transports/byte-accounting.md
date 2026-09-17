@@ -102,6 +102,9 @@ composition, including a turn beyond 32 MiB, late usage/output, slow readers,
 cancellation and read-error races. `tests/usage/request-log-nonstream.test.ts`
 binds the bounded non-stream wrapper to request-log status and metadata behavior.
 
+Retaining whole response bodies is the separate concern of `src/lib/bounded-body.ts`, whose cap,
+deadline, and cancellation rules are specified in the [bounded ingestion contract](inventory.md#bounded-response-ingestion-and-orcarouter-login).
+
 Upstream API-key usage follows the [physical-attempt account attribution contract](../gui-and-management-api.md#upstream-key-account-attribution), independently of subscription quota observations.
 
 ## Terminal-continuation retention
