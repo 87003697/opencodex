@@ -885,7 +885,7 @@ Do not rewrite an active paginated rollout or thread row to migrate those conver
 
 ## Experimental native mid-turn steering
 
-For a compatible native OpenAI model and a client that sends `response.steer`, enable both
+For a compatible model on the canonical ChatGPT forward route and a client that sends `response.steer`, enable both
 options in `~/.opencodex/config.json` and restart OpenCodex before starting a fresh turn:
 
 ```json
@@ -913,7 +913,7 @@ HTTP fallback, other providers, translated models, sidecars, Combo attempts and 
 restoration do not support this option. It does not add steering capability to a model or
 a client that lacks it. Unsupported routes return a protocol error rather than silently
 ignoring input. Disconnected or timed-out delivery may be unknown: never automatically
-resubmit tools or steering text. Pending controls time out after 90 seconds of inactivity;
+resubmit tools or steering text. Pending controls have fixed 90-second acknowledgement or successor deadlines;
 saved-tool-result waits have a 30-minute cap.
 
 The implementation has synthetic protocol and regression coverage, not live Astra/client
@@ -921,6 +921,40 @@ certification. Keep the option disabled for production work until your client/mo
 has been verified. Set `codexNativeSteering` to `false` and restart to restore the existing
 single-response relay; no account or conversation files need to be deleted.
 
+
+### Steering confirmation deadlines and retained context
+
+Each submitted steer has a fixed 90-second acknowledgement window. Other output
+and additional steers do not extend it. Once accepted, the input remains queued
+while the current response reaches a safe boundary; ordinary stream-idle checks
+still apply. After the response ends, the successor must begin within 90 seconds.
+A request for tool results or approval allows 30 minutes from the first such
+notification. Repeated notices do not renew this wait. Submitting saved results
+starts a new 90-second successor window, including local pacing/auth checks.
+Missing acknowledgements remain subject to their earlier individual deadlines.
+
+The owned connection itself has no absolute lifetime cap. Up to 128 responses may share it, and
+each may legitimately consume its own acknowledgement, successor, stream-idle and required-input
+waits, so the per-stage deadlines above compose to a worst case on the order of tens of hours.
+During that time the turn holds one physical socket and one pinned credential that cannot rotate,
+because the channel deliberately never re-enters account selection. Treat an enabled steering
+connection as a long-lived session resource rather than an ordinary bounded request.
+
+A timeout means **delivery is unknown**, not that the server rejected the input.
+Do not resend an accepted instruction or rerun a tool automatically. Inspect the
+actual task state before deciding how to resume. No account switch or paid API
+fallback is performed. Completed output already received on the wire is retained
+for local continuation history even when the terminal summary omits it. Conflicting
+item content or order causes an explicit failure rather than silent context loss.
+
+For a live comparison, use the same supported client version, model and account
+in isolated test conversations, once without the proxy and once with it enabled.
+Use a read-only task, steer while output is active, and compare acceptance and the
+successor's actual instruction adherence. Repeat while a synthetic tool result or
+approval is pending and after an explicit disconnect. Record only event types,
+relative times and redacted outcomes, not credentials or task bodies. Passing mock
+transport tests does not establish live client/backend support; no real-account
+smoke test is implied by these instructions.
 
 ## Experimental native function-result injection
 
