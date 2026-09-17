@@ -134,3 +134,16 @@ The same focused tests cover these lifecycle paths and Unicode code-unit limit b
 Native steering retains fixed phase deadlines and reconciled replay output; see the [steering stability contract](../transports/streaming-health.md#steering-deadlines-and-replay-completeness).
 
 Native steering generation overrides, explicit public-API eligibility and the consent-gated wire probe follow the [shared control contract](streaming-health.md#steering-settings-public-api-and-diagnostic-probe); this owner does not change routing or execute diagnostic tools.
+
+## Unicode pattern normalization
+
+`src/adapters/responses-tool-schema.ts` strips unsupported Unicode property patterns with an
+iterative traversal and copies containers only when a descendant changes. Unchanged siblings
+retain identity; a no-op returns the original input. Traversal frames follow the active path
+instead of queueing an assignment closure and eagerly cloned container for each sibling.
+Name bags, literal values and preserved constraint subtrees retain their existing semantics;
+the separate encrypted-marker normalizer is unchanged. Inputs are not mutated.
+This reduces avoidable allocations; it is not a hard heap cap or a guarantee of lower CPU cost.
+Schema size still determines traversal work and the cost of copying a changed broad container.
+`tests/adapters/openai/openai-chat-hardening.test.ts` covers wide, deep and mixed-array schemas;
+`tests/responses/openai-responses-passthrough.test.ts` covers the existing wire contract.
