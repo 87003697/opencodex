@@ -1319,5 +1319,6 @@
   "codex-pool-refresh-backoff.test.ts": "codex-integration",
   "responses-account-change-scrub.test.ts": "responses",
   "response-log-inspection.test.ts": "server",
-  "request-log-nonstream.test.ts": "usage"
+  "request-log-nonstream.test.ts": "usage",
+  "ws-native-steering.test.ts": "responses"
 }
