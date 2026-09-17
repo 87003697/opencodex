@@ -1,5 +1,6 @@
 # Overview
 
+Management provider-validation calls use the [shared relative send-path validation](config.md#provider-relative-send-paths) before persistence.
 Native steering follows [the shared WebSocket contract](transports/streaming-health.md#experimental-native-mid-turn-steering); this surface's defaults remain unchanged.
 
 The configuration-only [plaintext V2 contract](subagents.md#plaintext-v2-agent-messages)
