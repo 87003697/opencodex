@@ -733,6 +733,8 @@ class LiveCursorTransport implements CursorTransport {
         syntheticStructuredEditToolNames,
         translatorBudget: this.translatorBudget,
         contextUsage,
+        wireModelId: request.modelId,
+        identityScope: request._cursorIdentityScope,
         ...(prepared.estimatedInputTokens !== undefined
           ? { estimatedInputTokens: prepared.estimatedInputTokens }
           : {}),
