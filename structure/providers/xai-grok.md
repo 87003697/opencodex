@@ -127,6 +127,9 @@ overrides remain authoritative. First-party `deepseek-chat`, `deepseek-reasoner`
 The Crusoe fixed-key registry row, discovery predicate, effort ladder, and input-modality map are
 also provider-scoped and do not alter xAI model metadata, OAuth routing, or wire behavior.
 
+The Opper pool seeds in `src/providers/registry/entries-extended.ts` are also provider-scoped and
+do not alter xAI discovery, model metadata, or transport behavior.
+
 Native Chat applies qualifying effort ceilings independently of model pins; pin selection precedes the cap and only pins or cap rewrites enter wire mapping. The [catalog effort contract](../catalog.md#ultra-reasoning-level) records the V1/compaction exemptions and caller-preservation boundary.
 
 Combo child requests normalize effort and thinking controls against the selected target while retaining reasoning summaries; strict unknown targets preserve caller controls. The [Responses transport owner](../transports/responses.md) documents this boundary, and native Chat removes effort only for an explicit empty declaration or no-reasoning model.
